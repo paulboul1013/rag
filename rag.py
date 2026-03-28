@@ -1,5 +1,5 @@
 import re
-
+from sentence_transformers import SentenceTransformer, util
 
 article = """
 RAG 是 Retrieval-Augmented Generation 的縮寫，中文常翻成檢索增強生成。它的核心概念不是只依靠模型參數中的知識，而是先從外部資料中找出相關內容，再根據這些內容回答問題。
@@ -31,7 +31,13 @@ def extract_chinese_terms(text):
     return re.findall(r"[\u4e00-\u9fff]+", text)
 
 paragraphs=[p.strip() for p in article.split("\n\n") if p.strip()]
+model = SentenceTransformer("paraphrase-multilingual-MiniLM-L12-v2")
 
+corpus_embeddings = model.encode_document(
+    paragraphs,
+    convert_to_tensor=True,
+    normalize_embeddings=True
+)
 # print("total paragraphs:",len(paragraphs))
 # for i,p in enumerate(paragraphs,start=1):
 #     print(f"\n--- paragraph {i}")
@@ -76,29 +82,31 @@ def parse_keywords(query):
     return keywords
 
 
-query=input("input key word:").strip()
-# print("your query word is :",query)
+def semantic_search_paragraphs(query,paragraphs,corpus_embeddings,top_k=3):
+    query_embedding=model.encode_query(
+        query,
+        convert_to_tensor=True,
+        normalize_embeddings=True
+    )
 
-keywords=parse_keywords(query)
-# print("keyword list:",keywords)
+    hits=util.semantic_search(
+        query_embedding,
+        corpus_embeddings,
+        top_k=top_k
+    )[0]
 
-results=[]
+    results=[]
+    for hit in hits:
+        idx=hit["corpus_id"]
+        score=float(hit["score"])
+        paragraph=paragraphs[idx]
+        results.append((idx+1,score,paragraph))
 
-for i,paragraph in enumerate(paragraphs,start=1):
-    score,matched=score_paragraph(paragraph,keywords)
-    results.append((i,score,matched,paragraph))
+    return results
 
-# for item in results:
-    # print(item[0],item[1],item[2],item[3])
 
-    
-results.sort(key=lambda x:x[1],reverse=True)
-# print("sorted results:")
-# for item in results:
-#     print(item[0],item[1],item[2])
 
-top_k=3 # pick top 3 results
-top_results=[item for item in results if item[1] > 0][:top_k]
+top_k=3
 
 def highlight_text(text,keywords):
     highlighted=text
@@ -112,12 +120,22 @@ def highlight_text(text,keywords):
     return highlighted
 
 
-if not top_results:
-    print("can't find related paragraphs")
-else:
-    print("\nmost related paragraphs: ")
-    for idx,score,matched,paragraph in top_results:
-        print(f"\n--- paragraph {idx} ---")
-        print("score: ",score)
-        print("hit keyword :",matched)
-        print(highlight_text(paragraph,matched))
+while True:
+    query=input("input key word:").strip()
+    if not query:
+        break
+    semantic_results=semantic_search_paragraphs(
+        query,
+        paragraphs,
+        corpus_embeddings,
+        top_k=top_k
+    )
+    keywords=parse_keywords(query)
+    if not semantic_results:
+        print("can't find related paragraphs")
+    else:
+        print("\nmost related paragraphs: ")
+        for idx,score,paragraph in semantic_results:
+            print(f"\n--- paragraph {idx} ---")
+            print("semantic score: ",round(score,4))
+            print(highlight_text(paragraph,keywords))
