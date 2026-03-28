@@ -31,7 +31,10 @@ def extract_chinese_terms(text):
     return re.findall(r"[\u4e00-\u9fff]+", text)
 
 paragraphs=[p.strip() for p in article.split("\n\n") if p.strip()]
-model = SentenceTransformer("paraphrase-multilingual-MiniLM-L12-v2")
+model = SentenceTransformer("paraphrase-multilingual-MiniLM-L12-v2",
+                            cache_folder="./hf_cache",   # 可選
+                            local_files_only=False       # 第一次允許下載
+    )
 
 corpus_embeddings = model.encode_document(
     paragraphs,
