@@ -73,6 +73,12 @@ def score_paragraph(paragraph,keywords):
     matched_keywords = list(dict.fromkeys(matched_keywords))
     return score,matched_keywords
 
+def normalize_keyword_score(raw_score):
+    if raw_score <=0:
+        return 0.0
+
+    return min(raw_score/6.0,1.0)
+
 def parse_keywords(query):
     # return [word.strip().lower() for word in query.split() if word.strip()]
 
@@ -107,6 +113,44 @@ def semantic_search_paragraphs(query,paragraphs,corpus_embeddings,top_k=3):
 
     return results
 
+def get_semantic_scores(query,corpus_embeddings):
+    query_embedding=model.encode_query(
+        query,
+        convert_to_tensor=True,
+        normalize_embeddings=True
+    )
+
+    scores=util.cos_sim(query_embedding,corpus_embeddings)[0]
+    return scores.tolist()
+
+def hybird_search_paragraphs(query,paragraphs,corpus_embeddings,top_k=3):
+    keywords=parse_keywords(query)
+    semantic_scores=get_semantic_scores(query,corpus_embeddings)
+
+    results=[]
+
+    for i, paragraph in enumerate(paragraphs,start=1):
+        raw_keyword_score, matched =score_paragraph(paragraph,keywords)
+        keyword_score=normalize_keyword_score(raw_keyword_score)
+
+        semantic_score=float(semantic_scores[i-1])
+
+        hybird_score=0.8*semantic_score + 0.2 * keyword_score
+
+        results.append((
+            i,
+            hybird_score,
+            semantic_score,
+            keyword_score,
+            matched,
+            paragraph
+        ))
+    
+    results.sort(key=lambda x:x[1],reverse=True)
+
+    top_results=[item for item  in results if item[1] > 0][:top_k]
+    return top_results, keywords
+
 
 
 top_k=3
@@ -127,18 +171,21 @@ while True:
     query=input("input key word:").strip()
     if not query:
         break
-    semantic_results=semantic_search_paragraphs(
+    hybrid_results,keywords =hybird_search_paragraphs(
         query,
         paragraphs,
         corpus_embeddings,
         top_k=top_k
     )
-    keywords=parse_keywords(query)
-    if not semantic_results:
+
+    if not hybrid_results:
         print("can't find related paragraphs")
     else:
         print("\nmost related paragraphs: ")
-        for idx,score,paragraph in semantic_results:
+        for idx,hybird_score,semantic_score,keyword_score,matched,paragraph in hybrid_results:
             print(f"\n--- paragraph {idx} ---")
-            print("semantic score: ",round(score,4))
+            print("hybird_score: ",round(hybird_score,4))
+            print("semantic_score: ",round(semantic_score,4))
+            print("keyword_score: ",round(keyword_score,4))
+            print("matched: ",matched)
             print(highlight_text(paragraph,keywords))
