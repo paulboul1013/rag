@@ -123,7 +123,7 @@ def get_semantic_scores(query,corpus_embeddings):
     scores=util.cos_sim(query_embedding,corpus_embeddings)[0]
     return scores.tolist()
 
-def hybird_search_paragraphs(query,paragraphs,corpus_embeddings,top_k=3):
+def hybrid_search_paragraphs(query,paragraphs,corpus_embeddings,top_k=3):
     keywords=parse_keywords(query)
     semantic_scores=get_semantic_scores(query,corpus_embeddings)
 
@@ -135,11 +135,11 @@ def hybird_search_paragraphs(query,paragraphs,corpus_embeddings,top_k=3):
 
         semantic_score=float(semantic_scores[i-1])
 
-        hybird_score=0.8*semantic_score + 0.2 * keyword_score
+        hybrid_score=0.8*semantic_score + 0.2 * keyword_score
 
         results.append((
             i,
-            hybird_score,
+            hybrid_score,
             semantic_score,
             keyword_score,
             matched,
@@ -171,7 +171,7 @@ while True:
     query=input("input key word:").strip()
     if not query:
         break
-    hybrid_results,keywords =hybird_search_paragraphs(
+    hybrid_results,keywords =hybrid_search_paragraphs(
         query,
         paragraphs,
         corpus_embeddings,
@@ -182,9 +182,9 @@ while True:
         print("can't find related paragraphs")
     else:
         print("\nmost related paragraphs: ")
-        for idx,hybird_score,semantic_score,keyword_score,matched,paragraph in hybrid_results:
+        for idx,hybrid_score,semantic_score,keyword_score,matched,paragraph in hybrid_results:
             print(f"\n--- paragraph {idx} ---")
-            print("hybird_score: ",round(hybird_score,4))
+            print("hybrid_score: ",round(hybrid_score,4))
             print("semantic_score: ",round(semantic_score,4))
             print("keyword_score: ",round(keyword_score,4))
             print("matched: ",matched)
