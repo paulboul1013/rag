@@ -1,5 +1,8 @@
 import re
-from sentence_transformers import SentenceTransformer, util
+
+
+MODEL_NAME = "paraphrase-multilingual-MiniLM-L12-v2"
+TOP_K = 3
 
 article = """
 RAG 是 Retrieval-Augmented Generation 的縮寫，中文常翻成檢索增強生成。它的核心概念不是只依靠模型參數中的知識，而是先從外部資料中找出相關內容，再根據這些內容回答問題。
@@ -17,125 +20,138 @@ RAG 有一個很大的優點，就是可以降低模型胡亂回答的機率，�
 不過 RAG 也不是萬能的。如果 retrieval 階段找錯片段，後面的 generation 也會跟著出錯。所以很多時候，RAG 的品質不只取決於模型本身，也取決於 chunking 方式、檢索方法，以及資料是否乾淨。
 """
 
+paragraphs = [p.strip() for p in article.split("\n\n") if p.strip()]
+
+
 def normalize_text(text):
-    text=text.lower()
-    text=re.sub(r"\s+"," ",text)
+    text = text.lower()
+    text = re.sub(r"\s+", " ", text)
     return text.strip()
 
+
 def extract_english_words(text):
-    text=normalize_text(text)
-    return re.findall(r"[a-z0-9]+",text)
+    text = normalize_text(text)
+    return re.findall(r"[a-z0-9]+", text)
+
 
 def extract_chinese_terms(text):
-    text=normalize_text(text)
+    text = normalize_text(text)
     return re.findall(r"[\u4e00-\u9fff]+", text)
 
-paragraphs=[p.strip() for p in article.split("\n\n") if p.strip()]
-model = SentenceTransformer("paraphrase-multilingual-MiniLM-L12-v2",
-                            cache_folder="./hf_cache",   # 可選
-                            local_files_only=False       # 第一次允許下載
-    )
 
-corpus_embeddings = model.encode_document(
-    paragraphs,
-    convert_to_tensor=True,
-    normalize_embeddings=True
-)
-# print("total paragraphs:",len(paragraphs))
-# for i,p in enumerate(paragraphs,start=1):
-#     print(f"\n--- paragraph {i}")
-#     print(p)
+def score_paragraph(paragraph, keywords):
+    normalized_paragraph = normalize_text(paragraph)
 
+    english_words = extract_english_words(paragraph)
+    english_word_set = set(english_words)
 
-def score_paragraph(paragraph,keywords):
-    normalized_paragraph=normalize_text(paragraph)
-    
-    english_words=extract_english_words(paragraph)
-    english_word_set=set(english_words)
-
-    score=0
-    matched_keywords=[]
+    score = 0
+    matched_keywords = []
 
     for kw in keywords:
-        kw=normalize_text(kw)
+        kw = normalize_text(kw)
 
-        direct_count=normalized_paragraph.count(kw)
+        direct_count = normalized_paragraph.count(kw)
         if direct_count > 0:
-            score+=direct_count*3
+            score += direct_count * 3
             matched_keywords.append(kw)
             continue
 
-        if re.fullmatch(r"[a-z0-9]+",kw):
+        if re.fullmatch(r"[a-z0-9]+", kw):
             if kw in english_word_set:
-                score+=2
+                score += 2
                 matched_keywords.append(kw)
 
     matched_keywords = list(dict.fromkeys(matched_keywords))
-    return score,matched_keywords
+    return score, matched_keywords
+
 
 def normalize_keyword_score(raw_score):
-    if raw_score <=0:
+    if raw_score <= 0:
         return 0.0
 
-    return min(raw_score/6.0,1.0)
+    return min(raw_score / 6.0, 1.0)
+
 
 def parse_keywords(query):
-    # return [word.strip().lower() for word in query.split() if word.strip()]
+    query = normalize_text(query)
 
-    query=normalize_text(query)
+    english_terms = re.findall(r"[a-z0-9]+", query)
+    chinese_terms = re.findall(r"[\u4e00-\u9fff]+", query)
 
-    english_terms=re.findall(r"[a-z0-9]+",query)
-    chinese_terms=re.findall(r"[\u4e00-\u9fff]+",query)
-
-    keywords=english_terms+chinese_terms
+    keywords = english_terms + chinese_terms
     return keywords
 
 
-def semantic_search_paragraphs(query,paragraphs,corpus_embeddings,top_k=3):
-    query_embedding=model.encode_query(
-        query,
-        convert_to_tensor=True,
-        normalize_embeddings=True
+def load_model(model_name=MODEL_NAME):
+    from sentence_transformers import SentenceTransformer
+
+    return SentenceTransformer(
+        model_name,
+        cache_folder="./hf_cache",
+        local_files_only=False,
     )
 
-    hits=util.semantic_search(
+
+def build_corpus_embeddings(model, paragraphs):
+    return model.encode_document(
+        paragraphs,
+        convert_to_tensor=True,
+        normalize_embeddings=True,
+    )
+
+
+def semantic_search_paragraphs(query, paragraphs, corpus_embeddings, model, top_k=TOP_K):
+    from sentence_transformers import util
+
+    query_embedding = model.encode_query(
+        query,
+        convert_to_tensor=True,
+        normalize_embeddings=True,
+    )
+
+    hits = util.semantic_search(
         query_embedding,
         corpus_embeddings,
-        top_k=top_k
+        top_k=top_k,
     )[0]
 
-    results=[]
+    results = []
     for hit in hits:
-        idx=hit["corpus_id"]
-        score=float(hit["score"])
-        paragraph=paragraphs[idx]
-        results.append((idx+1,score,paragraph))
+        idx = hit["corpus_id"]
+        score = float(hit["score"])
+        paragraph = paragraphs[idx]
+        results.append((idx + 1, score, paragraph))
 
     return results
 
-def get_semantic_scores(query,corpus_embeddings):
-    query_embedding=model.encode_query(
+
+def get_semantic_scores(query, corpus_embeddings, model):
+    from sentence_transformers import util
+
+    query_embedding = model.encode_query(
         query,
         convert_to_tensor=True,
-        normalize_embeddings=True
+        normalize_embeddings=True,
     )
 
-    scores=util.cos_sim(query_embedding,corpus_embeddings)[0]
+    scores = util.cos_sim(query_embedding, corpus_embeddings)[0]
     return scores.tolist()
 
-def hybrid_search_paragraphs(query,paragraphs,corpus_embeddings,top_k=3):
-    keywords=parse_keywords(query)
-    semantic_scores=get_semantic_scores(query,corpus_embeddings)
 
-    results=[]
+def hybrid_search_paragraphs(query, paragraphs, corpus_embeddings, model, top_k=TOP_K):
+    keywords = parse_keywords(query)
+    semantic_scores = get_semantic_scores(query, corpus_embeddings, model)
 
-    for i, paragraph in enumerate(paragraphs,start=1):
-        raw_keyword_score, matched =score_paragraph(paragraph,keywords)
-        keyword_score=normalize_keyword_score(raw_keyword_score)
+    results = []
 
-        semantic_score=float(semantic_scores[i-1])
+    for i, paragraph in enumerate(paragraphs, start=1):
+        raw_keyword_score, matched = score_paragraph(paragraph, keywords)
+        keyword_score = normalize_keyword_score(raw_keyword_score)
 
-        hybrid_score=0.8*semantic_score + 0.2 * keyword_score
+        semantic_score = float(semantic_scores[i - 1])
+
+        hybrid_score = 0.8 * semantic_score + 0.2 * keyword_score
 
         results.append((
             i,
@@ -143,49 +159,58 @@ def hybrid_search_paragraphs(query,paragraphs,corpus_embeddings,top_k=3):
             semantic_score,
             keyword_score,
             matched,
-            paragraph
+            paragraph,
         ))
-    
-    results.sort(key=lambda x:x[1],reverse=True)
 
-    top_results=[item for item  in results if item[1] > 0][:top_k]
+    results.sort(key=lambda x: x[1], reverse=True)
+
+    top_results = [item for item in results if item[1] > 0][:top_k]
     return top_results, keywords
 
 
-
-top_k=3
-
-def highlight_text(text,keywords):
-    highlighted=text
+def highlight_text(text, keywords):
+    highlighted = text
     for kw in keywords:
-        pattern=re.compile(re.escape(kw),re.IGNORECASE)
+        pattern = re.compile(re.escape(kw), re.IGNORECASE)
         highlighted = pattern.sub(
             lambda m: f"\033[30;43m{m.group(0)}\033[0m",
-            highlighted
+            highlighted,
         )
-        
+
     return highlighted
 
 
-while True:
-    query=input("input key word:").strip()
-    if not query:
-        break
-    hybrid_results,keywords =hybrid_search_paragraphs(
-        query,
-        paragraphs,
-        corpus_embeddings,
-        top_k=top_k
-    )
+def run_cli(model, paragraphs, corpus_embeddings, top_k=TOP_K):
+    while True:
+        query = input("input key word:").strip()
+        if not query:
+            break
+        hybrid_results, keywords = hybrid_search_paragraphs(
+            query,
+            paragraphs,
+            corpus_embeddings,
+            model,
+            top_k=top_k,
+        )
 
-    if not hybrid_results:
-        print("can't find related paragraphs")
-    else:
-        print("\nmost related paragraphs: ")
-        for idx,hybrid_score,semantic_score,keyword_score,matched,paragraph in hybrid_results:
-            print(f"\n--- paragraph {idx} ---")
-            print("hybrid_score: ",round(hybrid_score,4))
-            print("semantic_score: ",round(semantic_score,4))
-            print("keyword_score: ",round(keyword_score,4))
-            print("matched: ",matched)
-            print(highlight_text(paragraph,keywords))
+        if not hybrid_results:
+            print("can't find related paragraphs")
+        else:
+            print("\nmost related paragraphs: ")
+            for idx, hybrid_score, semantic_score, keyword_score, matched, paragraph in hybrid_results:
+                print(f"\n--- paragraph {idx} ---")
+                print("hybrid_score: ", round(hybrid_score, 4))
+                print("semantic_score: ", round(semantic_score, 4))
+                print("keyword_score: ", round(keyword_score, 4))
+                print("matched: ", matched)
+                print(highlight_text(paragraph, keywords))
+
+
+def main():
+    model = load_model()
+    corpus_embeddings = build_corpus_embeddings(model, paragraphs)
+    run_cli(model, paragraphs, corpus_embeddings, top_k=TOP_K)
+
+
+if __name__ == "__main__":
+    main()
